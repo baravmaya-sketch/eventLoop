@@ -1,20 +1,21 @@
-import { Component, EventEmitter, Output, Input } from '@angular/core';
+import { Component, EventEmitter, Output, Input, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { EditorComponent as MonacoEditorComponent, MonacoEditorModule } from 'ngx-monaco-editor-v2';
 
 @Component({
   selector: 'app-editor',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, MonacoEditorModule],
   template: `
     <div class="panel editor-panel" [class.shake]="shake">
       <div class="panel-title">Code Editor</div>
       <div class="editor-container">
-        <textarea 
-          [(ngModel)]="code" 
-          spellcheck="false"
-          placeholder="// Type your JavaScript here..."
-        ></textarea>
+        <ngx-monaco-editor 
+          [options]="editorOptions" 
+          [(ngModel)]="code"
+          (onInit)="onInit($event)">
+        </ngx-monaco-editor>
       </div>
       <div class="actions">
         <button (click)="onRun()">Run >></button>
@@ -33,19 +34,15 @@ import { FormsModule } from '@angular/forms';
       position: relative;
       background: #1e1e1e;
       overflow: hidden;
+      display: flex;
     }
-    textarea {
+    ngx-monaco-editor {
       width: 100%;
       height: 100%;
-      background: transparent;
-      color: #cccccc;
-      border: none;
-      resize: none;
-      font-family: 'Consolas', 'Menlo', 'Monaco', 'Courier New', monospace;
-      font-size: 14px;
-      padding: 10px;
-      line-height: 1.5;
-      outline: none;
+    }
+    /* Monaco line highlight custom class */
+    ::ng-deep .highlight-line {
+      background: rgba(255, 255, 0, 0.2);
     }
     .actions {
       margin-top: 5px;
@@ -73,6 +70,13 @@ import { FormsModule } from '@angular/forms';
   `]
 })
 export class EditorComponent {
+  editorOptions = {
+    theme: 'vs-dark',
+    language: 'javascript',
+    minimap: { enabled: false },
+    automaticLayout: true
+  };
+
   code: string = `console.log("Start");
 setTimeout(() => console.log("Timeout"), 0);
 Promise.resolve().then(() => console.log("Promise"));
@@ -81,11 +85,32 @@ console.log("End");`;
   @Input() shake: boolean = false;
   @Output() runCode = new EventEmitter<string>();
 
+  private editor: any;
+  private currentDecorations: string[] = [];
+
+  onInit(editor: any) {
+    this.editor = editor;
+  }
+
   highlightLine(lineNumber?: number) {
-    // Textarea lookup for line highlighting is complex. 
-    // For this version, we accept we lose visual line highlighting inside the editor 
-    // in exchange for a working input.
-    // Future: Use a proper code mirror or overlay.
+    if (!this.editor) return;
+
+    if (!lineNumber) {
+      // Clear decorations
+      this.currentDecorations = this.editor.deltaDecorations(this.currentDecorations, []);
+      return;
+    }
+
+    this.currentDecorations = this.editor.deltaDecorations(this.currentDecorations, [
+      {
+        range: new (window as any).monaco.Range(lineNumber, 1, lineNumber, 1),
+        options: {
+          isWholeLine: true,
+          className: 'highlight-line',
+          glyphMarginClassName: 'highlight-line'
+        }
+      }
+    ]);
   }
 
   onRun() {

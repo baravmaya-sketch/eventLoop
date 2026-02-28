@@ -9,6 +9,7 @@ import { ConsoleComponent } from './components/visualizer/console.component';
 import { DiagnosticsComponent, LogEntry } from './components/diagnostics/diagnostics.component';
 import { SnippetService } from './services/snippet.service';
 import { SimulationService, Frame } from './services/simulation.service';
+import { Subscription, interval } from 'rxjs';
 
 @Component({
   selector: 'app-root',
@@ -196,7 +197,7 @@ export class AppComponent {
   diagnosticsLogs: LogEntry[] = [];
 
   // Timer reference
-  private playTimer: any;
+  private playSubscription?: Subscription;
 
   get currentFrame(): Frame | null {
     if (this.currentFrameIndex < 0 || this.currentFrameIndex >= this.frames.length) return null;
@@ -207,17 +208,7 @@ export class AppComponent {
     private snippetService: SnippetService,
     private simulationService: SimulationService
   ) {
-    this.setupSecurity();
     this.addLog('info', 'System Initialized. Ready for input.');
-  }
-
-  setupSecurity() {
-    document.addEventListener('contextmenu', event => event.preventDefault());
-    document.addEventListener('keydown', event => {
-      if (event.key === 'F12') event.preventDefault();
-      if (event.ctrlKey && event.shiftKey && (event.key === 'I' || event.key === 'J' || event.key === 'C')) event.preventDefault();
-      if (event.ctrlKey && (event.key === 'U' || event.key === 'u')) event.preventDefault();
-    });
   }
 
   handleRunCode(code: string) {
@@ -263,21 +254,29 @@ export class AppComponent {
   autoPlay() {
     if (!this.isPlaying) return;
 
-    this.playTimer = setTimeout(() => {
+    if (this.playSubscription) {
+      this.playSubscription.unsubscribe();
+    }
+
+    this.playSubscription = interval(this.playbackSpeed).subscribe(() => {
       if (this.currentFrameIndex < this.frames.length - 1) {
         this.currentFrameIndex++;
         this.updateEditorHighlight();
-        this.autoPlay();
       } else {
         this.isPlaying = false;
+        if (this.playSubscription) {
+          this.playSubscription.unsubscribe();
+        }
         this.addLog('info', 'Simulation sequence complete.');
       }
-    }, this.playbackSpeed);
+    });
   }
 
   reset() {
     this.isPlaying = false;
-    clearTimeout(this.playTimer);
+    if (this.playSubscription) {
+      this.playSubscription.unsubscribe();
+    }
     this.currentFrameIndex = -1;
     this.frames = [];
     this.hasError = false;
@@ -295,6 +294,10 @@ export class AppComponent {
   setSpeed(event: any) {
     this.playbackSpeed = parseInt(event.target.value, 10);
     this.addLog('info', `Playback speed set to ${this.playbackSpeed}ms`);
+    if (this.isPlaying) {
+      // Restart playback with new speed
+      this.autoPlay();
+    }
   }
 
   dismissError() {

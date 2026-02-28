@@ -15,8 +15,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for snippets
-snippets_db = {}
+import sqlite3
+
+# Initialize SQLite database
+DB_FILE = "snippets.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS snippets (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            code TEXT NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 class Snippet(BaseModel):
     id: Optional[str] = None
@@ -31,15 +53,32 @@ async def root():
 async def create_snippet(snippet: Snippet):
     snippet_id = str(uuid.uuid4())
     snippet.id = snippet_id
-    snippets_db[snippet_id] = snippet
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO snippets (id, title, code) VALUES (?, ?, ?)",
+        (snippet_id, snippet.title, snippet.code)
+    )
+    conn.commit()
+    conn.close()
     return snippet
 
 @app.get("/snippets/{snippet_id}", response_model=Snippet)
 async def get_snippet(snippet_id: str):
-    if snippet_id not in snippets_db:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM snippets WHERE id = ?", (snippet_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
         raise HTTPException(status_code=404, detail="Snippet not found")
-    return snippets_db[snippet_id]
+    return Snippet(**dict(row))
 
 @app.get("/snippets", response_model=List[Snippet])
 async def list_snippets():
-    return list(snippets_db.values())
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM snippets")
+    rows = cursor.fetchall()
+    conn.close()
+    return [Snippet(**dict(row)) for row in rows]

@@ -3,7 +3,7 @@ import * as acorn from 'acorn';
 
 export interface Frame {
     callStack: string[];
-    webApis: { name: string; remainingTime?: number }[];
+    webApis: { name: string; remainingTime?: number; callback: string }[];
     microtasks: string[];
     macrotasks: string[];
     consoleLogs: string[];
@@ -28,7 +28,7 @@ export class SimulationService {
         const captureFrame = (line?: number) => {
             frames.push({
                 callStack: [...callStack],
-                webApis: webApis.map(api => ({ name: api.name, remainingTime: api.remainingTime })),
+                webApis: webApis.map(api => ({ name: api.name, remainingTime: api.remainingTime, callback: api.callback })),
                 microtasks: [...microtasks],
                 macrotasks: [...macrotasks],
                 consoleLogs: [...consoleLogs],
@@ -61,11 +61,16 @@ export class SimulationService {
 
                 // Process WebAPIs (simulate time passing / events completing)
                 // Strict mapping: WebAPI -> Macrotask Queue
-                const completedApiIndex = webApis.findIndex(api => api.remainingTime !== undefined);
-                if (completedApiIndex !== -1) {
-                    const api = webApis.splice(completedApiIndex, 1)[0];
-                    macrotasks.push(api.callback);
-                    captureFrame();
+                for (let i = webApis.length - 1; i >= 0; i--) {
+                    const api = webApis[i];
+                    if (api.remainingTime !== undefined) {
+                        api.remainingTime = Math.max(0, api.remainingTime - 1);
+                        if (api.remainingTime === 0) {
+                            webApis.splice(i, 1);
+                            macrotasks.push(api.callback);
+                            captureFrame();
+                        }
+                    }
                 }
 
                 // Priority 1: Microtasks (Process ALL)
@@ -119,10 +124,28 @@ export class SimulationService {
     }
 
     private executeNode(node: any, ctx: any) {
+        if (!node) return;
         if (node.type === 'ExpressionStatement') {
             this.executeNode(node.expression, ctx);
         } else if (node.type === 'CallExpression') {
             this.handleCallExpression(node, ctx);
+        } else if (node.type === 'VariableDeclaration') {
+            ctx.captureFrame(node.loc.start.line);
+            // Mock declarations visually without deeply executing
+        } else if (node.type === 'FunctionDeclaration') {
+            ctx.captureFrame(node.loc.start.line);
+        } else if (node.type === 'ForStatement' || node.type === 'WhileStatement') {
+            ctx.captureFrame(node.loc.start.line);
+            // Basic loop mock - execute body once for visualization
+            if (node.body) {
+                if (node.body.type === 'BlockStatement') {
+                    this.executeNodes(node.body.body, ctx);
+                } else {
+                    this.executeNode(node.body, ctx);
+                }
+            }
+        } else if (node.type === 'BlockStatement') {
+            this.executeNodes(node.body, ctx);
         }
         // Add more node types as needed
     }
@@ -144,8 +167,25 @@ export class SimulationService {
         else if (callee.name === 'setTimeout') {
             callStack.push('setTimeout');
             captureFrame(node.loc.start.line);
-            const cbName = 'anonymous()'; // In full version, parse arrow func body
-            webApis.push({ name: 'setTimeout', remainingTime: 0, callback: cbName });
+
+            // Extract callback name or body and delay
+            let cbName = 'anonymous()';
+            if (node.arguments[0]) {
+                if (node.arguments[0].type === 'Identifier') {
+                    cbName = node.arguments[0].name + '()';
+                } else if (node.arguments[0].type === 'ArrowFunctionExpression' || node.arguments[0].type === 'FunctionExpression') {
+                    cbName = '() => {...}'; // Simplified
+                }
+            }
+
+            // Extract actual delay if provided, otherwise default to 1 tick
+            let delay = 1;
+            if (node.arguments[1] && node.arguments[1].type === 'Literal') {
+                // Convert ms to generic "ticks" for visualization. E.g. >0 means wait.
+                delay = Math.max(1, Math.ceil(node.arguments[1].value / 100)); // Arbitrary scale
+            }
+
+            webApis.push({ name: 'setTimeout', remainingTime: delay, callback: cbName });
             callStack.pop();
             captureFrame();
         }
@@ -154,7 +194,17 @@ export class SimulationService {
             // Simplified detection for Promise.resolve().then()
             callStack.push('Promise.then');
             captureFrame(node.loc.start.line);
-            microtasks.push('anonymous()'); // Promise callback
+
+            let cbName = 'anonymous()';
+            if (node.arguments[0]) {
+                if (node.arguments[0].type === 'Identifier') {
+                    cbName = node.arguments[0].name + '()';
+                } else if (node.arguments[0].type === 'ArrowFunctionExpression' || node.arguments[0].type === 'FunctionExpression') {
+                    cbName = '() => {...}';
+                }
+            }
+
+            microtasks.push(cbName); // Promise callback
             callStack.pop();
             captureFrame();
         }

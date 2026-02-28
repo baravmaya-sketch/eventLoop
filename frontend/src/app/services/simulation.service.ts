@@ -23,6 +23,7 @@ export class SimulationService {
         const webApis: { name: string; remainingTime?: number; callback: string }[] = [];
         const consoleLogs: string[] = [];
         const callStack: string[] = [];
+        const variables: Record<string, any> = {};
 
         // Snapshot helper
         const captureFrame = (line?: number) => {
@@ -46,7 +47,7 @@ export class SimulationService {
 
             // Simple interpreter
             this.executeNodes(ast.body, {
-                callStack, webApis, microtasks, macrotasks, consoleLogs, captureFrame
+                callStack, webApis, microtasks, macrotasks, consoleLogs, variables, captureFrame
             });
 
             callStack.pop(); // main() done
@@ -131,23 +132,89 @@ export class SimulationService {
             this.handleCallExpression(node, ctx);
         } else if (node.type === 'VariableDeclaration') {
             ctx.captureFrame(node.loc.start.line);
-            // Mock declarations visually without deeply executing
+            for (const dec of node.declarations) {
+                if (dec.id && dec.init) {
+                    ctx.variables[dec.id.name] = this.evaluateExpression(dec.init, ctx);
+                } else if (dec.id) {
+                    ctx.variables[dec.id.name] = undefined;
+                }
+            }
+        } else if (node.type === 'AssignmentExpression') {
+            ctx.captureFrame(node.loc.start.line);
+            if (node.left.type === 'Identifier') {
+                ctx.variables[node.left.name] = this.evaluateExpression(node.right, ctx);
+            }
+        } else if (node.type === 'UpdateExpression') {
+            ctx.captureFrame(node.loc.start.line);
+            this.evaluateExpression(node, ctx);
         } else if (node.type === 'FunctionDeclaration') {
             ctx.captureFrame(node.loc.start.line);
-        } else if (node.type === 'ForStatement' || node.type === 'WhileStatement') {
+        } else if (node.type === 'ForStatement') {
             ctx.captureFrame(node.loc.start.line);
-            // Basic loop mock - execute body once for visualization
-            if (node.body) {
+            if (node.init) this.executeNode(node.init, ctx);
+            let loops = 0;
+            while ((!node.test || this.evaluateExpression(node.test, ctx)) && loops < 50) {
+                loops++;
                 if (node.body.type === 'BlockStatement') {
                     this.executeNodes(node.body.body, ctx);
                 } else {
                     this.executeNode(node.body, ctx);
                 }
+                if (node.update) this.executeNode(node.update, ctx);
+                ctx.captureFrame(node.loc.start.line);
+            }
+        } else if (node.type === 'WhileStatement') {
+            ctx.captureFrame(node.loc.start.line);
+            let loops = 0;
+            while (this.evaluateExpression(node.test, ctx) && loops < 50) {
+                loops++;
+                if (node.body.type === 'BlockStatement') {
+                    this.executeNodes(node.body.body, ctx);
+                } else {
+                    this.executeNode(node.body, ctx);
+                }
+                ctx.captureFrame(node.loc.start.line);
             }
         } else if (node.type === 'BlockStatement') {
             this.executeNodes(node.body, ctx);
         }
         // Add more node types as needed
+    }
+
+    private evaluateExpression(node: any, ctx: any): any {
+        if (!node) return undefined;
+        if (node.type === 'Literal') {
+            return node.value;
+        } else if (node.type === 'Identifier') {
+            return ctx.variables[node.name];
+        } else if (node.type === 'BinaryExpression') {
+            const left = this.evaluateExpression(node.left, ctx);
+            const right = this.evaluateExpression(node.right, ctx);
+            switch (node.operator) {
+                case '+': return left + right;
+                case '-': return left - right;
+                case '*': return left * right;
+                case '/': return left / right;
+                case '<': return left < right;
+                case '>': return left > right;
+                case '<=': return left <= right;
+                case '>=': return left >= right;
+                case '==': return left == right;
+                case '===': return left === right;
+                case '!=': return left != right;
+                case '!==': return left !== right;
+                default: return undefined;
+            }
+        } else if (node.type === 'UpdateExpression') {
+            if (node.argument.type === 'Identifier') {
+                let val = ctx.variables[node.argument.name] || 0;
+                if (node.operator === '++') val++;
+                else if (node.operator === '--') val--;
+                ctx.variables[node.argument.name] = val;
+                return val;
+            }
+        }
+        return undefined;
     }
 
     private handleCallExpression(node: any, ctx: any) {
@@ -156,10 +223,20 @@ export class SimulationService {
 
         // console.log
         if (callee.type === 'MemberExpression' && callee.object.name === 'console' && callee.property.name === 'log') {
-            const arg = node.arguments[0]?.value || node.arguments[0]?.raw || '';
+            let argText = '';
+            if (node.arguments[0]) {
+                const evaluated = this.evaluateExpression(node.arguments[0], ctx);
+                if (evaluated !== undefined) {
+                    argText = String(evaluated);
+                } else if (node.arguments[0].type === 'Identifier') {
+                    argText = 'undefined';
+                } else {
+                    argText = node.arguments[0]?.value || node.arguments[0]?.name || node.arguments[0]?.raw || '';
+                }
+            }
             callStack.push('console.log');
             captureFrame(node.loc.start.line);
-            consoleLogs.push(arg);
+            consoleLogs.push(argText);
             callStack.pop();
             captureFrame();
         }
